@@ -1,0 +1,1496 @@
+--[[
+    THICCIFY + CHAIN NOM + DIGEST + EAT ANYTHING
+    - FIX: Asset positions spread at assetScale^0.4 so they stay attached
+    - FIX: Player scaling rate bumped to 0.70 (was 0.40) — avatar grows bigger
+    - All features preserved: Select Mode, Eat Anything, jiggle, burps, etc.
+]]
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+local CONFIG = {
+    hips = { extraSpread = 0.18 },
+    jiggle = {
+        walkAmplitude = 0.08, walkSpeed = 14, runMultiplier = 1.5,
+        idleAmplitude = 0.02, idleSpeed = 1.8,
+        landingAmplitude = 0.22, landingDecay = 4.5,
+        gluteOffset = 0.5, phaseOffset = math.pi * 0.35,
+        bellyWalkAmplitude = 0.14, bellyIdleAmplitude = 0.03,
+        bellyIdleSpeed = 1.2, bellyLandingSag = 0.55,
+        bellyLandingPushZ = 0.45, bellyPhaseSpread = 0.35,
+    },
+    growth = {
+        basePlayerScale      = 1.00,
+        threshold            = 1.10,
+        assetDamping         = 0.35,
+        playerScalePerGrowth = 0.70,   -- BIGGER avatar growth per digest
+        positionExponent     = 0.4,    -- asset positions spread slower than mesh
+    },
+    breast = {
+        layers = {
+            {pos = {0.34,  0.10, -0.32}, scale = {0.75, 0.60, 0.70}},
+            {pos = {0.36, -0.05, -0.44}, scale = {0.90, 0.80, 0.80}},
+            {pos = {0.36, -0.22, -0.44}, scale = {0.90, 0.80, 0.80}},
+            {pos = {0.34, -0.38, -0.36}, scale = {0.68, 0.60, 0.70}},
+            {pos = {0.20, -0.10, -0.44}, scale = {0.48, 0.62, 0.55}},
+            {pos = {0.18, -0.28, -0.42}, scale = {0.42, 0.52, 0.48}},
+        },
+        areola = { pos = {0.40, -0.16, -0.78}, scale = {0.42, 0.42, 0.15}, color = Color3.fromRGB(205, 135, 135) },
+        nipple = { pos = {0.40, -0.17, -0.88}, scale = {0.18, 0.18, 0.13}, color = Color3.fromRGB(145, 75, 80) },
+    },
+    glute = {
+        layers = {
+            {pos = {0.30,  0.10, 0.24}, scale = {0.78, 0.68, 0.72}},
+            {pos = {0.34, -0.15, 0.38}, scale = {0.95, 0.90, 0.90}},
+            {pos = {0.34, -0.42, 0.38}, scale = {0.95, 0.90, 0.90}},
+            {pos = {0.32, -0.62, 0.30}, scale = {0.82, 0.72, 0.78}},
+            {pos = {0.30, -0.78, 0.20}, scale = {0.58, 0.50, 0.52}},
+        },
+    },
+    thigh = {
+        layers = {
+            {pos = {0.26,  0.42, 0.02}, scale = {0.72, 0.52, 0.70}},
+            {pos = {0.28,  0.18, 0.00}, scale = {0.78, 0.68, 0.74}},
+            {pos = {0.28, -0.08, -0.02}, scale = {0.80, 0.76, 0.74}},
+            {pos = {0.26, -0.35, -0.02}, scale = {0.74, 0.76, 0.68}},
+            {pos = {0.24, -0.58, -0.02}, scale = {0.64, 0.64, 0.62}},
+            {pos = {0.22, -0.78, 0.00}, scale = {0.56, 0.54, 0.55}},
+        },
+    },
+    slit = { innerPinkColor = Color3.fromRGB(215, 115, 140), deepPinkColor = Color3.fromRGB(140, 50, 75) },
+    burp = {
+        soundId = "rbxassetid://138587268",
+        particleTex = "rbxasset://textures/particles/smoke_main.dds",
+        minInterval = 3.5, maxInterval = 7.0,
+        minAtMax = 1.8, maxAtMax = 3.5,
+        particleCount = 18,
+        headTiltDeg = 32, headTiltTime = 0.5,
+    },
+    digest = {
+        duration = 1.2,
+        growPerLevel = 0.08,
+        finalBurpDelay = 0.05,
+    },
+    nom = {
+        spawnHeight = 22, fallDuration = 0.85, dummyScale = 0.9,
+        throatTravelTime = 0.55, bellyPopInTime = 0.40,
+        growTweenTime = 0.55,
+
+        earlyLevels    = 4,
+        earlyRateX     = 0.10, earlyRateY = 0.15, earlyRateZ = 0.30,
+        midLevels      = 8,
+        midRateX       = 0.06, midRateY  = 0.09, midRateZ  = 0.18,
+        lateRateX      = 0.025, lateRateY = 0.035, lateRateZ = 0.070,
+
+        bellyScaleDamp = 0.5,
+        yHangCapLevels = 5,
+        yHangPerLevel  = 0.20,
+
+        bulgeBaseCount = 4, bulgePerLevel = 3, bulgeMaxCount = 15,
+        bulgeSize = 0.65,
+        bulgeThetaRange = 1.35, bulgePhiRange = 1.05,
+        bulgeIdleFrac = 0.72, bulgePushFrac = 0.96,
+        bulgeIdleMin = 1.4, bulgeIdleMax = 3.0,
+        bulgePushMin = 0.5, bulgePushMax = 0.9,
+        bulgeMaxConcurrent = 3,
+
+        selectMode = {
+            maxDistance      = 250,
+            fillColor        = Color3.fromRGB(255, 100, 100),
+            fillTransparency = 0.65,
+            outlineColor     = Color3.fromRGB(255, 210, 80),
+            outlineThickness = 2,
+            sizeDivisor = 4,
+            minGain     = 1,
+            maxGain     = 15,
+            riseDuration  = 1.1,
+            fallDuration  = 0.5,
+            shrinkDuration = 0.35,
+            riseHeight    = 16,
+        },
+    },
+    RIG_PARTS = {
+        "Head",
+        "UpperTorso", "LowerTorso", "Torso",
+        "LeftUpperArm", "LeftLowerArm", "LeftHand",
+        "RightUpperArm", "RightLowerArm", "RightHand",
+        "LeftUpperLeg", "LeftLowerLeg", "LeftFoot",
+        "RightUpperLeg", "RightLowerLeg", "RightFoot",
+        "Left Arm", "Right Arm", "Left Leg", "Right Leg",
+    },
+}
+
+local NOM_BELLY_LAYER_DEFS = {
+    {name = "NomBellyMain",  base = Vector3.new(2.9, 2.5, 2.1), baseC0 = Vector3.new(0, -0.40, -0.95), backZ = 0.10, yHang = 0.35},
+    {name = "NomBellyLower", base = Vector3.new(2.4, 1.6, 1.9), baseC0 = Vector3.new(0, -1.05, -0.88), backZ = 0.07, yHang = 0.60},
+    {name = "NomBellyUpper", base = Vector3.new(2.1, 1.4, 1.6), baseC0 = Vector3.new(0,  0.25, -0.75), backZ = 0.05, yHang = 0.10},
+    {name = "NomBellySide",  base = Vector3.new(3.1, 2.0, 1.4), baseC0 = Vector3.new(0, -0.45, -0.70), backZ = 0.00, yHang = 0.40},
+}
+
+-- ============================ STATE ============================
+local thiccified = false
+local createdParts, removedClothing, recoloredParts = {}, {}, {}
+local jiggleParts, jiggleTime, landingEnergy, wasOnGround, jiggleConn = {}, 0, 0, true, nil
+local isNomming, bellyActive, nomLevel, isDigesting = false, false, 0, false
+local activeBellyLayers, activeBulges, bulgeConn = {}, {}, nil
+local nomTempParts, nomModel = {}, nil
+local hipSpreadConn = nil
+
+local currentBodyGrowth = 1.0
+local appliedScale = 1.0
+local bodyMeshRefs = {}
+
+local burpConn, burpEmitter, burpSound, burpAttachment = nil, nil, nil, nil
+local burpTiltAmt = 0
+local burpTiltConn = nil
+
+local selectModeOn = false
+local selectedModel = nil
+local hoverHighlight = nil
+local lockedHighlight = nil
+local tierLabel = nil
+local clickConn = nil
+local hoverConn = nil
+
+-- ============================ GROWTH MATH ============================
+local function getAssetScale(growth)
+    local t = CONFIG.growth.threshold
+    if growth <= t then return growth end
+    return t + (growth - t) * CONFIG.growth.assetDamping
+end
+
+local function getPlayerScale(growth)
+    local base = CONFIG.growth.basePlayerScale
+    local t = CONFIG.growth.threshold
+    if growth <= t then return base end
+    return base + (growth - t) * CONFIG.growth.playerScalePerGrowth
+end
+
+local function getBellyPlayerScale(ps)
+    return 1 + (ps - 1) * CONFIG.nom.bellyScaleDamp
+end
+
+local function getBellyGrowthXYZ(level)
+    local t = math.max(0, level - 1)
+    local early = math.min(t, CONFIG.nom.earlyLevels)
+    local mid   = math.max(0, math.min(t - CONFIG.nom.earlyLevels, CONFIG.nom.midLevels))
+    local late  = math.max(0, t - CONFIG.nom.earlyLevels - CONFIG.nom.midLevels)
+
+    local gx = 1 + early * CONFIG.nom.earlyRateX + mid * CONFIG.nom.midRateX + late * CONFIG.nom.lateRateX
+    local gy = 1 + early * CONFIG.nom.earlyRateY + mid * CONFIG.nom.midRateY + late * CONFIG.nom.lateRateY
+    local gz = 1 + early * CONFIG.nom.earlyRateZ + mid * CONFIG.nom.midRateZ + late * CONFIG.nom.lateRateZ
+    return gx, gy, gz
+end
+
+-- ============================ CHARACTER SCALE ============================
+local function setCharacterScale(character, scale)
+    if not character or not character.Parent then return end
+    if math.abs(scale - appliedScale) < 0.005 then return end
+
+    local ok, err = pcall(function()
+        character:ScaleTo(scale)
+    end)
+
+    if ok then
+        appliedScale = scale
+    else
+        local hum = character:FindFirstChildOfClass("Humanoid")
+        if hum then
+            local h = hum:FindFirstChild("BodyHeightScale")
+            local w = hum:FindFirstChild("BodyWidthScale")
+            local d = hum:FindFirstChild("BodyDepthScale")
+            local hd = hum:FindFirstChild("HeadScale")
+            if h and h:IsA("NumberValue") then h.Value = scale end
+            if w and w:IsA("NumberValue") then w.Value = scale end
+            if d and d:IsA("NumberValue") then d.Value = scale end
+            if hd and hd:IsA("NumberValue") then hd.Value = scale end
+            appliedScale = scale
+        end
+    end
+end
+
+local function startHipSpread(character)
+    if hipSpreadConn then hipSpreadConn:Disconnect() end
+    hipSpreadConn = RunService.Heartbeat:Connect(function()
+        if not character.Parent then
+            if hipSpreadConn then hipSpreadConn:Disconnect() end
+            hipSpreadConn = nil
+            return
+        end
+        local lt = character:FindFirstChild("LowerTorso") or character:FindFirstChild("Torso")
+        if not lt then return end
+        local rh = lt:FindFirstChild("RightHip")
+        local lh = lt:FindFirstChild("LeftHip")
+        if not (rh and lh) then return end
+
+        local ps = getPlayerScale(currentBodyGrowth)
+        local extra = CONFIG.hips.extraSpread * ps
+        local rBase = rh.C0
+        local rRot = rBase - rBase.Position
+        rh.C0 = CFrame.new(rBase.Position + Vector3.new(extra, 0, 0)) * rRot
+        local lBase = lh.C0
+        local lRot = lBase - lBase.Position
+        lh.C0 = CFrame.new(lBase.Position + Vector3.new(-extra, 0, 0)) * lRot
+    end)
+end
+
+local function stopHipSpread()
+    if hipSpreadConn then hipSpreadConn:Disconnect(); hipSpreadConn = nil end
+end
+
+-- ============================ UTIL ============================
+local function getHeadColor(character)
+    local head = character:FindFirstChild("Head")
+    if head then return head.BrickColor end
+    local bc = character:FindFirstChild("BodyColors")
+    if bc then return bc.HeadColor end
+    return BrickColor.new("Medium orange")
+end
+
+-- FIX: position uses assetScale^positionExponent so assets stay attached
+local function makeEllipsoid(name, parent, color, baseScale, rawPos, weldTo, jiggleGroup)
+    local p = Instance.new("Part")
+    p.Name = name; p.Size = Vector3.new(1,1,1); p.BrickColor = color
+    p.Material = Enum.Material.SmoothPlastic
+    p.Anchored = false; p.CanCollide = false; p.Massless = true
+    p.TopSurface = Enum.SurfaceType.Smooth; p.BottomSurface = Enum.SurfaceType.Smooth
+    p.Parent = parent
+
+    local assetScale = getAssetScale(currentBodyGrowth)
+    local playerScale = getPlayerScale(currentBodyGrowth)
+    local posMult = assetScale ^ CONFIG.growth.positionExponent
+
+    local mesh = Instance.new("SpecialMesh")
+    mesh.MeshType = Enum.MeshType.Sphere
+    mesh.Scale = baseScale * assetScale
+    mesh.Parent = p
+
+    local scaledPos = rawPos * playerScale * posMult
+    local cf = weldTo.CFrame * CFrame.new(scaledPos)
+    p.CFrame = cf
+
+    local w = Instance.new("Weld")
+    w.Part0 = weldTo; w.Part1 = p
+    w.C0 = CFrame.new(scaledPos); w.C1 = CFrame.new()
+    w.Parent = p
+
+    table.insert(createdParts, p)
+    if jiggleGroup then
+        table.insert(jiggleParts, {part = p, weld = w, baseC0 = w.C0, group = jiggleGroup})
+    end
+    table.insert(bodyMeshRefs, {
+        mesh = mesh,
+        baseScale = baseScale,
+        weld = w,
+        baseRawPos = rawPos,
+    })
+    return p
+end
+
+local function removeClothing(character)
+    removedClothing = {}
+    for _, child in pairs(character:GetChildren()) do
+        if child:IsA("Shirt") or child:IsA("Pants") or child:IsA("ShirtGraphic") then
+            table.insert(removedClothing, {instance = child, parent = character})
+            child.Parent = nil
+        end
+    end
+end
+
+local function restoreClothing()
+    for _, entry in pairs(removedClothing) do
+        if entry.instance and entry.parent then entry.instance.Parent = entry.parent end
+    end
+    removedClothing = {}
+end
+
+local function recolorRig(character)
+    recoloredParts = {}
+    local hc = getHeadColor(character)
+    for _, name in ipairs(CONFIG.RIG_PARTS) do
+        local part = character:FindFirstChild(name)
+        if part and part:IsA("BasePart") then
+            table.insert(recoloredParts, {part = part, originalColor = part.BrickColor})
+            part.BrickColor = hc
+        end
+    end
+end
+
+local function restoreRigColors()
+    for _, entry in pairs(recoloredParts) do
+        if entry.part and entry.part.Parent then entry.part.BrickColor = entry.originalColor end
+    end
+    recoloredParts = {}
+end
+
+-- ============================ BUILD ANATOMY ============================
+local function buildBreast(ut, sc)
+    for _, side in ipairs({-1, 1}) do
+        local sfx = (side > 0) and "R" or "L"
+        for i, layer in ipairs(CONFIG.breast.layers) do
+            makeEllipsoid("BreastLayer"..i..sfx, ut, sc,
+                Vector3.new(layer.scale[1], layer.scale[2], layer.scale[3]),
+                Vector3.new(layer.pos[1]*side, layer.pos[2], layer.pos[3]),
+                ut, "breast"..sfx)
+        end
+        local a = CONFIG.breast.areola
+        makeEllipsoid("Areola"..sfx, ut, BrickColor.new(a.color),
+            Vector3.new(a.scale[1],a.scale[2],a.scale[3]),
+            Vector3.new(a.pos[1]*side,a.pos[2],a.pos[3]),
+            ut, "breast"..sfx)
+        local n = CONFIG.breast.nipple
+        makeEllipsoid("Nipple"..sfx, ut, BrickColor.new(n.color),
+            Vector3.new(n.scale[1],n.scale[2],n.scale[3]),
+            Vector3.new(n.pos[1]*side,n.pos[2],n.pos[3]),
+            ut, "breast"..sfx)
+    end
+end
+
+local function buildGlute(lt, sc)
+    for _, side in ipairs({-1, 1}) do
+        local sfx = (side > 0) and "R" or "L"
+        for i, layer in ipairs(CONFIG.glute.layers) do
+            makeEllipsoid("GluteLayer"..i..sfx, lt, sc,
+                Vector3.new(layer.scale[1],layer.scale[2],layer.scale[3]),
+                Vector3.new(layer.pos[1]*side,layer.pos[2],layer.pos[3]),
+                lt, "glute"..sfx)
+        end
+    end
+end
+
+local function buildThigh(character, sc)
+    for _, side in ipairs({-1, 1}) do
+        local sfx = (side > 0) and "R" or "L"
+        local leg = character:FindFirstChild(sfx=="R" and "RightUpperLeg" or "LeftUpperLeg")
+            or character:FindFirstChild(sfx=="R" and "Right Leg" or "Left Leg")
+        if leg then
+            for i, layer in ipairs(CONFIG.thigh.layers) do
+                makeEllipsoid("ThighLayer"..i..sfx, leg, sc,
+                    Vector3.new(layer.scale[1],layer.scale[2],layer.scale[3]),
+                    Vector3.new(layer.pos[1]*side,layer.pos[2],layer.pos[3]),
+                    leg)
+            end
+        end
+    end
+end
+
+local function buildSlit(lt, sc)
+    local ip = BrickColor.new(CONFIG.slit.innerPinkColor)
+    local dp = BrickColor.new(CONFIG.slit.deepPinkColor)
+    makeEllipsoid("SlitInnerPink", lt, ip, Vector3.new(0.20,0.48,0.20), Vector3.new(0,-0.60,-0.50), lt)
+    makeEllipsoid("SlitDeepPink", lt, dp, Vector3.new(0.10,0.38,0.12), Vector3.new(0,-0.60,-0.55), lt)
+    makeEllipsoid("SlitLipL", lt, sc, Vector3.new(0.20,0.55,0.25), Vector3.new(-0.11,-0.60,-0.42), lt)
+    makeEllipsoid("SlitLipR", lt, sc, Vector3.new(0.20,0.55,0.25), Vector3.new(0.11,-0.60,-0.42), lt)
+    makeEllipsoid("SlitHood", lt, sc, Vector3.new(0.24,0.24,0.22), Vector3.new(0,-0.28,-0.45), lt)
+end
+
+-- ============================ JIGGLE ============================
+local function startJiggle(character)
+    if jiggleConn then jiggleConn:Disconnect() end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    jiggleTime = 0; landingEnergy = 0; wasOnGround = true
+    jiggleConn = RunService.Heartbeat:Connect(function(dt)
+        if not character.Parent then
+            if jiggleConn then jiggleConn:Disconnect() end
+            jiggleConn = nil; return
+        end
+        if isDigesting then return end
+
+        jiggleTime = jiggleTime + dt
+        local speed = humanoid and humanoid.MoveDirection.Magnitude or 0
+        local isRunning = speed > 0.6
+        if humanoid then
+            local onGround = humanoid.FloorMaterial ~= Enum.Material.Air
+            if onGround and not wasOnGround then landingEnergy = CONFIG.jiggle.landingAmplitude end
+            wasOnGround = onGround
+        end
+        landingEnergy = landingEnergy * math.exp(-CONFIG.jiggle.landingDecay * dt)
+        if landingEnergy < 0.001 then landingEnergy = 0 end
+        local walkMult = isRunning and CONFIG.jiggle.runMultiplier or 1
+        local walkBounce = math.abs(math.sin(jiggleTime * CONFIG.jiggle.walkSpeed))
+            * CONFIG.jiggle.walkAmplitude * (speed>0.1 and 1 or 0) * walkMult
+        local idleBounce = math.sin(jiggleTime * CONFIG.jiggle.idleSpeed) * CONFIG.jiggle.idleAmplitude
+        local totalBounce = walkBounce + idleBounce + landingEnergy
+        local sway = math.sin(jiggleTime * CONFIG.jiggle.walkSpeed * 0.5)
+            * CONFIG.jiggle.walkAmplitude * 0.4 * (speed>0.1 and 1 or 0)
+        local bellyWalk = math.abs(math.sin(jiggleTime * CONFIG.jiggle.walkSpeed + math.pi*0.3))
+            * CONFIG.jiggle.bellyWalkAmplitude * (speed>0.1 and 1 or 0) * walkMult
+        local bellyIdle = math.sin(jiggleTime * CONFIG.jiggle.bellyIdleSpeed) * CONFIG.jiggle.bellyIdleAmplitude
+        local bellySag = -landingEnergy * CONFIG.jiggle.bellyLandingSag
+        local bellyPush = -landingEnergy * CONFIG.jiggle.bellyLandingPushZ
+        for _, entry in pairs(jiggleParts) do
+            if entry.part and entry.part.Parent and entry.weld and entry.weld.Parent then
+                if entry.group == "belly" then
+                    local idx = entry.bellyIndex or 1
+                    local phase = (idx - 1) * CONFIG.jiggle.bellyPhaseSpread
+                    local amp = (idx==1 and 0.7) or (idx==2 and 1.15) or (idx==3 and 0.85) or 0.9
+                    local gb = (bellyWalk*amp + bellyIdle*amp + bellySag*amp)
+                    if speed > 0.1 then
+                        gb = gb + math.sin(jiggleTime * CONFIG.jiggle.walkSpeed + phase) * 0.04 * (speed>0.5 and 1.4 or 1)
+                    end
+                    local baseVec = entry.baseValue and entry.baseValue.Value or Vector3.new(0,0,0)
+                    entry.weld.C0 = CFrame.new(baseVec + Vector3.new(0, gb, bellyPush*amp))
+                else
+                    local isGlute = string.sub(entry.group, 1, 5) == "glute"
+                    local sideSign = string.sub(entry.group, -1) == "R" and 1 or -1
+                    local phase = isGlute and CONFIG.jiggle.phaseOffset or 0
+                    local mult = isGlute and CONFIG.jiggle.gluteOffset or 1
+                    local gb = totalBounce * mult
+                    if phase ~= 0 and speed > 0.1 then
+                        gb = gb * 0.6 + math.abs(math.sin(jiggleTime * CONFIG.jiggle.walkSpeed + phase))
+                            * CONFIG.jiggle.walkAmplitude * mult * (isRunning and CONFIG.jiggle.runMultiplier or 1)
+                    end
+                    entry.weld.C0 = entry.baseC0 + Vector3.new(sway * sideSign * 0.5, gb, 0)
+                end
+            end
+        end
+    end)
+end
+
+local function stopJiggle()
+    if jiggleConn then jiggleConn:Disconnect(); jiggleConn = nil end
+    jiggleParts = {}; jiggleTime = 0; landingEnergy = 0
+end
+
+local function clearAll(character)
+    stopJiggle()
+    for _, p in pairs(createdParts) do if p and p.Parent then p:Destroy() end end
+    createdParts = {}
+    bodyMeshRefs = {}
+    if character then restoreRigColors() end
+end
+
+local function buildAll(character)
+    if not character or not character.Parent then return end
+    clearAll(character)
+    local ut = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
+    local lt = character:FindFirstChild("LowerTorso") or character:FindFirstChild("Torso")
+    if not ut or not lt then return end
+
+    setCharacterScale(character, getPlayerScale(currentBodyGrowth))
+    task.wait(0.05)
+
+    recolorRig(character)
+    local sc = getHeadColor(character)
+    buildBreast(ut, sc); buildGlute(lt, sc); buildThigh(character, sc); buildSlit(lt, sc)
+    startJiggle(character)
+    startHipSpread(character)
+end
+
+-- ============================ BURPS ============================
+local function findNeckMotor(character)
+    local head = character:FindFirstChild("Head")
+    if not head then return nil end
+    for _, d in pairs(character:GetDescendants()) do
+        if d:IsA("Motor6D") and (d.Name == "Neck" or d.Name == "RootJoint") then
+            if d.Part1 == head then return d end
+        end
+    end
+    return nil
+end
+
+local function setupBurpObjects(character)
+    if burpAttachment and burpAttachment.Parent then burpAttachment:Destroy() end
+    if burpSound and burpSound.Parent then burpSound:Destroy() end
+    local head = character:FindFirstChild("Head")
+    if not head then return end
+    local att = Instance.new("Attachment")
+    att.Name = "BurpMouth"; att.Parent = head
+    att.Position = Vector3.new(0, -0.55, -0.55)
+    local emit = Instance.new("ParticleEmitter")
+    emit.Name = "BurpParticles"; emit.Texture = CONFIG.burp.particleTex
+    emit.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(140, 240, 140)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(60, 160, 60)),
+    })
+    emit.Size = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.6),
+        NumberSequenceKeypoint.new(1, 2.2),
+    })
+    emit.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.15),
+        NumberSequenceKeypoint.new(0.6, 0.5),
+        NumberSequenceKeypoint.new(1, 1),
+    })
+    emit.Lifetime = NumberRange.new(0.9, 1.6)
+    emit.Speed = NumberRange.new(5, 10)
+    emit.SpreadAngle = Vector2.new(22, 22)
+    emit.Rate = 0
+    emit.Rotation = NumberRange.new(0, 360)
+    emit.RotSpeed = NumberRange.new(-40, 40)
+    emit.LightEmission = 0.5
+    emit.Parent = att
+    local sound = Instance.new("Sound")
+    sound.Name = "BurpSound"; sound.SoundId = CONFIG.burp.soundId
+    sound.Volume = 2.5; sound.Pitch = 1; sound.RollOffMaxDistance = 50
+    sound.Parent = head
+    burpAttachment = att; burpEmitter = emit; burpSound = sound
+end
+
+local function startBurpTiltConnection()
+    if burpTiltConn then burpTiltConn:Disconnect() end
+    burpTiltConn = RunService.RenderStepped:Connect(function()
+        if burpTiltAmt <= 0 then return end
+        local character = player.Character
+        if not character then return end
+        local neck = findNeckMotor(character)
+        if not neck then return end
+        if not neck:GetAttribute("BurpBaseCX") then
+            neck:SetAttribute("BurpBaseCX", neck.C0.X)
+            neck:SetAttribute("BurpBaseCY", neck.C0.Y)
+            neck:SetAttribute("BurpBaseCZ", neck.C0.Z)
+        end
+        local bx = neck:GetAttribute("BurpBaseCX")
+        local by = neck:GetAttribute("BurpBaseCY")
+        local bz = neck:GetAttribute("BurpBaseCZ")
+        if bx then
+            local tilt = CFrame.Angles(math.rad(CONFIG.burp.headTiltDeg * burpTiltAmt), 0, 0)
+            neck.C0 = CFrame.new(bx, by, bz) * tilt
+        end
+    end)
+end
+
+local function triggerBurp(character)
+    if not character or not character.Parent then return end
+    if not burpEmitter or not burpEmitter.Parent then return end
+    if not burpSound or not burpSound.Parent then return end
+    burpEmitter:Emit(CONFIG.burp.particleCount)
+    burpSound.Pitch = (0.9 + math.random() * 0.3) / math.max(1, appliedScale * 0.7)
+    burpSound:Play()
+    task.spawn(function()
+        local neck = findNeckMotor(character)
+        if neck and not neck:GetAttribute("BurpBaseCX") then
+            neck:SetAttribute("BurpBaseCX", neck.C0.X)
+            neck:SetAttribute("BurpBaseCY", neck.C0.Y)
+            neck:SetAttribute("BurpBaseCZ", neck.C0.Z)
+        end
+        local dur = CONFIG.burp.headTiltTime
+        local t0 = os.clock()
+        while os.clock() - t0 < dur do
+            if not neck or not neck.Parent then burpTiltAmt = 0; return end
+            local elapsed = os.clock() - t0
+            local a = math.clamp(elapsed / dur, 0, 1)
+            burpTiltAmt = (a < 0.5) and (a * 2) or ((1 - a) * 2)
+            RunService.RenderStepped:Wait()
+        end
+        burpTiltAmt = 0
+        if neck and neck.Parent then
+            local bx = neck:GetAttribute("BurpBaseCX")
+            local by = neck:GetAttribute("BurpBaseCY")
+            local bz = neck:GetAttribute("BurpBaseCZ")
+            if bx then neck.C0 = CFrame.new(bx, by, bz) end
+        end
+    end)
+end
+
+local function startBurpLoop(character)
+    if burpConn then burpConn:Disconnect() end
+    setupBurpObjects(character)
+    startBurpTiltConnection()
+    local timeAccum = 0
+    local nextInterval = math.random(1.5, 3.0)
+    burpConn = RunService.Heartbeat:Connect(function(dt)
+        if not bellyActive or not character.Parent or isDigesting then
+            if burpConn then burpConn:Disconnect() end
+            burpConn = nil
+            return
+        end
+        timeAccum = timeAccum + dt
+        if timeAccum >= nextInterval then
+            timeAccum = 0
+            triggerBurp(character)
+            local t = math.clamp((nomLevel - 1) / 8, 0, 1)
+            local minI = CONFIG.burp.minInterval + (CONFIG.burp.minAtMax - CONFIG.burp.minInterval) * t
+            local maxI = CONFIG.burp.maxInterval + (CONFIG.burp.maxAtMax - CONFIG.burp.maxInterval) * t
+            nextInterval = minI + math.random() * (maxI - minI)
+        end
+    end)
+end
+
+local function stopBurpLoop()
+    if burpConn then burpConn:Disconnect(); burpConn = nil end
+    if burpTiltConn then burpTiltConn:Disconnect(); burpTiltConn = nil end
+    if burpAttachment and burpAttachment.Parent then burpAttachment:Destroy() end
+    if burpSound and burpSound.Parent then burpSound:Destroy() end
+    burpAttachment = nil; burpEmitter = nil; burpSound = nil
+    burpTiltAmt = 0
+end
+
+-- ============================ NOM DUMMY ============================
+local function buildNomDummy()
+    local model = Instance.new("Model")
+    model.Name = "NomDummy"
+    local skin = BrickColor.new("Bright yellow")
+    local shirt = BrickColor.new("Bright blue")
+    local pants = BrickColor.new("Bright green")
+    local function mp(name, size, color, cf)
+        local p = Instance.new("Part")
+        p.Name = name; p.Size = size * CONFIG.nom.dummyScale
+        p.BrickColor = color; p.Material = Enum.Material.SmoothPlastic
+        p.Anchored = true; p.CanCollide = false
+        p.TopSurface = Enum.SurfaceType.Smooth; p.BottomSurface = Enum.SurfaceType.Smooth
+        p.Parent = model; p.CFrame = cf
+        return p
+    end
+    local head = mp("Head", Vector3.new(1,1,1), skin, CFrame.new(0, -1.4, -0.5))
+    mp("Torso", Vector3.new(2,2,1), shirt, CFrame.new(0, 0, 0))
+    mp("LeftArm", Vector3.new(1,2,1), skin, CFrame.new(-1.3, -0.2, -0.2) * CFrame.Angles(0, 0, math.rad(-25)))
+    mp("RightArm", Vector3.new(1,2,1), skin, CFrame.new(1.3, -0.2, -0.2) * CFrame.Angles(0, 0, math.rad(25)))
+    mp("LeftLeg", Vector3.new(1,2,1), pants, CFrame.new(-0.5, -1.5, -0.8) * CFrame.Angles(math.rad(-45), 0, 0))
+    mp("RightLeg", Vector3.new(1,2,1), pants, CFrame.new(0.5, -1.5, -0.8) * CFrame.Angles(math.rad(-45), 0, 0))
+    local face = Instance.new("Decal")
+    face.Face = Enum.NormalId.Front; face.Texture = "rbxasset://textures/face.png"; face.Parent = head
+    model.PrimaryPart = head; model.Parent = workspace
+    for _, p in pairs(model:GetChildren()) do
+        if p:IsA("BasePart") and p ~= head then
+            local w = Instance.new("WeldConstraint")
+            w.Part0 = head; w.Part1 = p; w.Parent = p
+        end
+    end
+    return model
+end
+
+local function setDummyCFrame(model, cf)
+    if not model or not model.PrimaryPart then return end
+    local head = model.PrimaryPart
+    local delta = cf * head.CFrame:Inverse()
+    for _, p in pairs(model:GetChildren()) do
+        if p:IsA("BasePart") then p.CFrame = delta * p.CFrame end
+    end
+end
+
+local function setDummyTransparency(model, alpha)
+    if not model then return end
+    for _, p in pairs(model:GetDescendants()) do
+        if p:IsA("BasePart") then p.Transparency = alpha end
+    end
+end
+
+local function setDummyScale(model, factor)
+    if not model then return end
+    for _, p in pairs(model:GetChildren()) do
+        if p:IsA("BasePart") then
+            if not p:GetAttribute("BaseSize") then p:SetAttribute("BaseSize", p.Size) end
+            p.Size = p:GetAttribute("BaseSize") * factor
+        end
+    end
+end
+
+-- ============================ NOM BELLY ============================
+local function computeBellyTargetsForLevel(level)
+    local gx, gy, gz = getBellyGrowthXYZ(level)
+    local ps = getPlayerScale(currentBodyGrowth)
+    local psBelly = getBellyPlayerScale(ps)
+    local sagLevel = math.min(math.max(0, level - 1), CONFIG.nom.yHangCapLevels)
+
+    local result = {}
+    for i, def in ipairs(NOM_BELLY_LAYER_DEFS) do
+        local ns = Vector3.new(
+            def.base.X * gx * psBelly,
+            def.base.Y * gy * psBelly,
+            def.base.Z * gz * psBelly
+        )
+        local backZWorld = def.backZ * ps
+        local centerZ = backZWorld - ns.Z / 2
+        local sagY = -sagLevel * def.yHang * CONFIG.nom.yHangPerLevel * psBelly
+        local centerY = def.baseC0.Y * psBelly + sagY
+        local centerX = def.baseC0.X * psBelly
+        result[i] = {c0 = Vector3.new(centerX, centerY, centerZ), scale = ns}
+    end
+    return result
+end
+
+local function createNomBelly(character, sc)
+    local lt = character:FindFirstChild("LowerTorso") or character:FindFirstChild("Torso")
+    if not lt then return end
+    activeBellyLayers = {}; activeBulges = {}
+    local targets = computeBellyTargetsForLevel(1)
+    for idx, def in ipairs(NOM_BELLY_LAYER_DEFS) do
+        local p = Instance.new("Part")
+        p.Name = def.name; p.Size = Vector3.new(1,1,1); p.BrickColor = sc
+        p.Material = Enum.Material.SmoothPlastic
+        p.Anchored = false; p.CanCollide = false; p.Massless = true
+        p.TopSurface = Enum.SurfaceType.Smooth; p.BottomSurface = Enum.SurfaceType.Smooth
+        p.Parent = character
+        local mesh = Instance.new("SpecialMesh")
+        mesh.MeshType = Enum.MeshType.Sphere
+        mesh.Scale = Vector3.new(0.05, 0.05, 0.05)
+        mesh.Parent = p
+        local baseValue = Instance.new("Vector3Value")
+        baseValue.Name = "BellyBasePosition"
+        baseValue.Value = targets[idx].c0
+        baseValue.Parent = p
+        local w = Instance.new("Weld")
+        w.Part0 = lt; w.Part1 = p
+        w.C0 = CFrame.new(targets[idx].c0); w.C1 = CFrame.new()
+        w.Parent = p
+        p.CFrame = lt.CFrame * w.C0
+        table.insert(nomTempParts, p)
+        table.insert(jiggleParts, {
+            part = p, weld = w, baseC0 = w.C0, baseValue = baseValue,
+            group = "belly", bellyIndex = idx,
+        })
+        table.insert(activeBellyLayers, {
+            part = p, mesh = mesh, weld = w, baseValue = baseValue,
+            baseScale = def.base, def = def,
+        })
+    end
+end
+
+local function createBulge(character, sc, bellyMain)
+    local theta = (math.random() * 2 - 1) * CONFIG.nom.bulgeThetaRange
+    local phi = (math.random() * 2 - 1) * CONFIG.nom.bulgePhiRange
+    local p = Instance.new("Part")
+    p.Name = "NomBulge"; p.Size = Vector3.new(1,1,1); p.BrickColor = sc
+    p.Material = Enum.Material.SmoothPlastic
+    p.Anchored = false; p.CanCollide = false; p.Massless = true
+    p.TopSurface = Enum.SurfaceType.Smooth; p.BottomSurface = Enum.SurfaceType.Smooth
+    p.Parent = character
+    local mesh = Instance.new("SpecialMesh")
+    mesh.MeshType = Enum.MeshType.Sphere
+    local s = CONFIG.nom.bulgeSize
+    local sm = 0.85 + math.random() * 0.3
+    mesh.Scale = Vector3.new(s, s, s) * sm
+    mesh.Parent = p
+    local w = Instance.new("Weld")
+    w.Part0 = bellyMain; w.Part1 = p
+    w.C0 = CFrame.new(0, 0, 0); w.C1 = CFrame.new(); w.Parent = p
+    table.insert(nomTempParts, p)
+    table.insert(activeBulges, {
+        part = p, weld = w, theta = theta, phi = phi, sizeMult = sm,
+        nextPushTime = os.clock() + 0.4 + math.random() * 1.5,
+        pushing = false, pushStartTime = 0,
+        pushDuration = CONFIG.nom.bulgePushMin + math.random() * (CONFIG.nom.bulgePushMax - CONFIG.nom.bulgePushMin),
+    })
+end
+
+local function addBulgesForCurrentLevel(character, sc)
+    if not activeBellyLayers[1] then return end
+    local bm = activeBellyLayers[1].part
+    local target = math.min(
+        CONFIG.nom.bulgeBaseCount + (nomLevel - 1) * CONFIG.nom.bulgePerLevel,
+        CONFIG.nom.bulgeMaxCount
+    )
+    for i = 1, target - #activeBulges do createBulge(character, sc, bm) end
+end
+
+local function startBulgeLoop(character)
+    if bulgeConn then bulgeConn:Disconnect() end
+    bulgeConn = RunService.Heartbeat:Connect(function()
+        if not character.Parent or not bellyActive or isDigesting then return end
+        if not activeBellyLayers[1] then return end
+        local bmm = activeBellyLayers[1].mesh
+        if not bmm or not bmm.Parent then return end
+        local now = os.clock()
+        local hx = bmm.Scale.X * 0.5
+        local hy = bmm.Scale.Y * 0.5
+        local hz = bmm.Scale.Z * 0.5
+        local pc = 0
+        for _, s in ipairs(activeBulges) do if s.pushing then pc = pc + 1 end end
+        for i, state in ipairs(activeBulges) do
+            if state.weld and state.weld.Parent and state.part and state.part.Parent then
+                local frac
+                if state.pushing then
+                    local p = (now - state.pushStartTime) / state.pushDuration
+                    if p >= 1 then
+                        state.pushing = false; pc = pc - 1
+                        state.nextPushTime = now + CONFIG.nom.bulgeIdleMin + math.random() * (CONFIG.nom.bulgeIdleMax - CONFIG.nom.bulgeIdleMin)
+                        frac = CONFIG.nom.bulgeIdleFrac
+                    else
+                        local arc = math.sin(p * math.pi)
+                        frac = CONFIG.nom.bulgeIdleFrac + (CONFIG.nom.bulgePushFrac - CONFIG.nom.bulgeIdleFrac) * arc
+                    end
+                else
+                    frac = CONFIG.nom.bulgeIdleFrac
+                    if now >= state.nextPushTime then
+                        if pc < CONFIG.nom.bulgeMaxConcurrent then
+                            state.pushing = true; state.pushStartTime = now
+                            state.pushDuration = CONFIG.nom.bulgePushMin + math.random() * (CONFIG.nom.bulgePushMax - CONFIG.nom.bulgePushMin)
+                            pc = pc + 1
+                        else
+                            state.nextPushTime = now + 0.3 + math.random() * 0.5
+                        end
+                    end
+                end
+                local dx = math.sin(state.theta) * math.cos(state.phi)
+                local dy = math.sin(state.phi)
+                local dz = -math.cos(state.theta) * math.cos(state.phi)
+                state.weld.C0 = CFrame.new(Vector3.new(dx*hx, dy*hy, dz*hz) * frac)
+            end
+        end
+    end)
+end
+
+local function growBellyToLevel(character, popIn)
+    local info
+    if popIn then
+        info = TweenInfo.new(CONFIG.nom.bellyPopInTime, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+    else
+        info = TweenInfo.new(CONFIG.nom.growTweenTime, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+    end
+    local targets = computeBellyTargetsForLevel(nomLevel)
+    for idx, layer in ipairs(activeBellyLayers) do
+        local target = targets[idx]
+        if target then
+            if layer.mesh and layer.mesh.Parent then
+                TweenService:Create(layer.mesh, info, {Scale = target.scale}):Play()
+            end
+            if layer.baseValue and layer.baseValue.Parent then
+                TweenService:Create(layer.baseValue, info, {Value = target.c0}):Play()
+            end
+        end
+    end
+end
+
+-- ============================ APPLY BELLY GAIN ============================
+local function applyBellyGain(character, sc, gain)
+    local isFirst = not bellyActive
+    if isFirst then
+        createNomBelly(character, sc)
+        bellyActive = true
+        nomLevel = gain
+        growBellyToLevel(character, true)
+        addBulgesForCurrentLevel(character, sc)
+        startBulgeLoop(character)
+        startBurpLoop(character)
+    else
+        nomLevel = nomLevel + gain
+        growBellyToLevel(character, false)
+        addBulgesForCurrentLevel(character, sc)
+    end
+end
+
+-- ============================ NOM SEQUENCE ============================
+local function runNomSequence(character)
+    if not character or not character.Parent then return end
+    if isNomming or isDigesting then return end
+    isNomming = true
+    local head = character:FindFirstChild("Head")
+    local ut = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
+    local lt = character:FindFirstChild("LowerTorso") or character:FindFirstChild("Torso")
+    if not head or not ut or not lt then isNomming = false; return end
+    local sc = getHeadColor(character)
+
+    local dummy = buildNomDummy()
+    nomModel = dummy
+    setDummyCFrame(dummy, head.CFrame * CFrame.new(0, CONFIG.nom.spawnHeight, 0))
+
+    local fallT = 0
+    while fallT < CONFIG.nom.fallDuration do
+        local dt = RunService.Heartbeat:Wait()
+        fallT = fallT + dt
+        if not dummy.Parent or not character.Parent then break end
+        local h = character:FindFirstChild("Head")
+        if not h then break end
+        local a = math.clamp(fallT / CONFIG.nom.fallDuration, 0, 1)
+        a = a * a
+        local startCF = h.CFrame * CFrame.new(0, CONFIG.nom.spawnHeight, 0)
+        local endCF = h.CFrame * CFrame.new(0, -0.3, -0.6)
+        local pos = startCF.Position:Lerp(endCF.Position, a)
+        setDummyCFrame(dummy, CFrame.new(pos) * CFrame.Angles(math.rad(a * 180), math.rad(180), 0))
+    end
+
+    if dummy.Parent then
+        local shrinkT = 0
+        while shrinkT < 0.20 do
+            local dt = RunService.Heartbeat:Wait()
+            shrinkT = shrinkT + dt
+            if not dummy.Parent or not character.Parent then break end
+            local h = character:FindFirstChild("Head")
+            if not h then break end
+            local a = math.clamp(shrinkT / 0.20, 0, 1)
+            local mouthPos = h.Position + Vector3.new(0, -0.4, -0.6)
+            setDummyCFrame(dummy, CFrame.new(dummy.PrimaryPart.Position:Lerp(mouthPos, a)))
+            setDummyScale(dummy, 1 - a * 0.95)
+            setDummyTransparency(dummy, a * 0.9)
+        end
+        dummy:Destroy()
+        nomModel = nil
+    end
+
+    local throat = Instance.new("Part")
+    throat.Name = "NomThroatBulge"; throat.Size = Vector3.new(1,1,1)
+    throat.BrickColor = sc; throat.Material = Enum.Material.SmoothPlastic
+    throat.Anchored = true; throat.CanCollide = false; throat.Parent = character
+    local tm = Instance.new("SpecialMesh")
+    tm.MeshType = Enum.MeshType.Sphere; tm.Scale = Vector3.new(0.85, 1.25, 0.85); tm.Parent = throat
+    table.insert(nomTempParts, throat)
+
+    local travelT = 0
+    while travelT < CONFIG.nom.throatTravelTime do
+        local dt = RunService.Heartbeat:Wait()
+        travelT = travelT + dt
+        if not character.Parent then break end
+        local h = character:FindFirstChild("Head")
+        local u2 = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
+        local l2 = character:FindFirstChild("LowerTorso") or character:FindFirstChild("Torso")
+        if not h or not u2 or not l2 then break end
+        local a = math.clamp(travelT / CONFIG.nom.throatTravelTime, 0, 1)
+        local p1 = (h.CFrame * CFrame.new(0, -0.6, -0.5)).Position
+        local p2 = (u2.CFrame * CFrame.new(0, 0, -0.7)).Position
+        local p3 = (l2.CFrame * CFrame.new(0, -0.4, -0.9)).Position
+        local pos = (a < 0.5) and p1:Lerp(p2, a/0.5) or p2:Lerp(p3, (a-0.5)/0.5)
+        throat.CFrame = CFrame.new(pos)
+        throat.Transparency = math.max(0, 1 - a * 4)
+    end
+    throat:Destroy()
+
+    applyBellyGain(character, sc, 1)
+    isNomming = false
+end
+
+-- ============================ EAT ANYTHING — Selection ============================
+local function clearHoverHighlight()
+    if hoverHighlight then hoverHighlight:Destroy(); hoverHighlight = nil end
+end
+
+local function clearLockedHighlight()
+    if lockedHighlight then lockedHighlight:Destroy(); lockedHighlight = nil end
+    if tierLabel then tierLabel:Destroy(); tierLabel = nil end
+end
+
+local function computeLevelGain(model)
+    local ok, extents = pcall(function() return model:GetExtentsSize() end)
+    if not ok or not extents then return 1 end
+    local diag = extents.Magnitude
+    local gain = math.clamp(math.floor(diag / CONFIG.nom.selectMode.sizeDivisor),
+        CONFIG.nom.selectMode.minGain, CONFIG.nom.selectMode.maxGain)
+    return gain, diag
+end
+
+local function applyLockedHighlight(model)
+    clearLockedHighlight()
+    local gain, diag = computeLevelGain(model)
+    selectedModel = model
+
+    local hl = Instance.new("Highlight")
+    hl.Name = "EatTargetHighlight"
+    hl.Adornee = model
+    hl.FillColor = CONFIG.nom.selectMode.fillColor
+    hl.FillTransparency = CONFIG.nom.selectMode.fillTransparency
+    hl.OutlineColor = CONFIG.nom.selectMode.outlineColor
+    hl.OutlineTransparency = 0
+    hl.DepthMode = Enum.HighlightDepthMode.Occluded
+    hl.Parent = model
+    lockedHighlight = hl
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "EatTargetLabel"
+    billboard.Size = UDim2.new(0, 200, 0, 50)
+    billboard.StudsOffsetWorldSpace = Vector3.new(0, 5, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Adornee = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
+    if not billboard.Adornee then
+        for _, p in pairs(model:GetDescendants()) do
+            if p:IsA("BasePart") then billboard.Adornee = p; break end
+        end
+    end
+    billboard.Parent = model
+
+    local text = Instance.new("TextLabel")
+    text.Size = UDim2.new(1, 0, 1, 0)
+    text.BackgroundTransparency = 1
+    text.TextColor3 = Color3.fromRGB(255, 220, 120)
+    text.Font = Enum.Font.SourceSansBold
+    text.TextScaled = true
+    text.TextStrokeTransparency = 0.3
+    text.Text = string.format("EAT: +%d belly", gain)
+    text.Parent = billboard
+    tierLabel = billboard
+end
+
+local function findModelAtScreenPosition(x, y)
+    if not camera then return nil end
+    local ray = camera:ViewportPointToRay(x, y)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {player.Character}
+    local result = workspace:Raycast(ray.Origin, ray.Direction * CONFIG.nom.selectMode.maxDistance, params)
+    if not result then return nil end
+    local hit = result.Instance
+    if not hit then return nil end
+    if hit:IsA("Terrain") then return nil end
+    local top = hit
+    while top.Parent and top.Parent ~= workspace do
+        top = top.Parent
+    end
+    return top
+end
+
+local function startSelectMode()
+    if selectModeOn then return end
+    selectModeOn = true
+
+    hoverConn = RunService.RenderStepped:Connect(function()
+        if not selectModeOn then return end
+        if lockedHighlight then return end
+
+        local mouse = UserInputService:GetMouseLocation()
+        local target = findModelAtScreenPosition(mouse.X, mouse.Y)
+
+        if target and target ~= hoverHighlight then
+            clearHoverHighlight()
+            local hl = Instance.new("Highlight")
+            hl.Name = "EatHoverHighlight"
+            hl.Adornee = target
+            hl.FillColor = Color3.fromRGB(200, 200, 255)
+            hl.FillTransparency = 0.8
+            hl.OutlineColor = Color3.fromRGB(150, 150, 220)
+            hl.OutlineTransparency = 0.3
+            hl.DepthMode = Enum.HighlightDepthMode.Occluded
+            hl.Parent = target
+            hoverHighlight = hl
+        elseif not target then
+            clearHoverHighlight()
+        end
+    end)
+
+    if clickConn then clickConn:Disconnect() end
+    clickConn = UserInputService.InputBegan:Connect(function(input, processed)
+        if processed then return end
+        if not selectModeOn then return end
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1
+           and input.UserInputType ~= Enum.UserInputType.Touch then return end
+
+        local target
+        if input.UserInputType == Enum.UserInputType.Touch then
+            target = findModelAtScreenPosition(input.Position.X, input.Position.Y)
+        else
+            local mouse = UserInputService:GetMouseLocation()
+            target = findModelAtScreenPosition(mouse.X, mouse.Y)
+        end
+
+        if target then
+            applyLockedHighlight(target)
+        else
+            clearLockedHighlight()
+            selectedModel = nil
+        end
+    end)
+end
+
+local function stopSelectMode()
+    selectModeOn = false
+    clearHoverHighlight()
+    clearLockedHighlight()
+    selectedModel = nil
+    if clickConn then clickConn:Disconnect(); clickConn = nil end
+    if hoverConn then hoverConn:Disconnect(); hoverConn = nil end
+end
+
+-- ============================ EAT ANYTHING — Animation ============================
+local function eatSelectedModel(character)
+    local model = selectedModel
+    if not model or not model.Parent then return false end
+
+    isNomming = true
+    clearLockedHighlight()
+    clearHoverHighlight()
+    selectedModel = nil
+
+    local head = character:FindFirstChild("Head")
+    local ut = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
+    local lt = character:FindFirstChild("LowerTorso") or character:FindFirstChild("Torso")
+    if not head or not ut or not lt then isNomming = false; return true end
+    local sc = getHeadColor(character)
+
+    local gain = computeLevelGain(model)
+
+    local allParts = {}
+    for _, p in pairs(model:GetDescendants()) do
+        if p:IsA("BasePart") then
+            p.Anchored = true
+            table.insert(allParts, p)
+        end
+    end
+    if #allParts == 0 then isNomming = false; return true end
+
+    local startPivot = model:GetPivot()
+    local aboveHeadPos = head.Position + Vector3.new(0, CONFIG.nom.selectMode.riseHeight, 0)
+    local mouthPos = head.Position + Vector3.new(0, -0.4, -0.6)
+    local midPos = startPivot.Position:Lerp(aboveHeadPos, 0.5) + Vector3.new(0, 8, 0)
+
+    local riseDur = CONFIG.nom.selectMode.riseDuration
+    local riseT = 0
+    while riseT < riseDur do
+        local dt = RunService.Heartbeat:Wait()
+        if not character.Parent or not model.Parent then break end
+        riseT = riseT + dt
+        local a = math.clamp(riseT / riseDur, 0, 1)
+        local e = 1 - (1 - a) * (1 - a)
+        local p0 = startPivot.Position
+        local p1 = midPos
+        local p2 = aboveHeadPos
+        local u = e
+        local pos = (1 - u) * (1 - u) * p0 + 2 * (1 - u) * u * p1 + u * u * p2
+        local rot = CFrame.Angles(0, math.rad(e * 360), 0)
+        local newCF = CFrame.new(pos) * rot
+        pcall(function() model:PivotTo(newCF) end)
+    end
+
+    if model.Parent and character.Parent then
+        local fallStart = model:GetPivot()
+        local fallDur = CONFIG.nom.selectMode.fallDuration
+        local fallT = 0
+        while fallT < fallDur do
+            local dt = RunService.Heartbeat:Wait()
+            if not character.Parent or not model.Parent then break end
+            fallT = fallT + dt
+            local a = math.clamp(fallT / fallDur, 0, 1)
+            a = a * a
+            local pos = fallStart.Position:Lerp(mouthPos, a)
+            local newCF = CFrame.new(pos)
+            pcall(function() model:PivotTo(newCF) end)
+        end
+    end
+
+    if model.Parent and character.Parent then
+        local shrinkDur = CONFIG.nom.selectMode.shrinkDuration
+        local shrinkT = 0
+        while shrinkT < shrinkDur do
+            local dt = RunService.Heartbeat:Wait()
+            if not model.Parent then break end
+            shrinkT = shrinkT + dt
+            local a = math.clamp(shrinkT / shrinkDur, 0, 1)
+            for _, p in pairs(allParts) do
+                if p.Parent then p.Transparency = math.min(1, p.Transparency + (a * 0.9) * (dt / shrinkDur) * 3) end
+            end
+        end
+    end
+
+    if model.Parent then model:Destroy() end
+
+    if character.Parent then
+        applyBellyGain(character, sc, gain)
+        if burpEmitter and burpEmitter.Parent then
+            burpEmitter:Emit(math.min(60, 12 + gain * 4))
+        end
+        if gain >= 5 and burpSound and burpSound.Parent then
+            local thud = Instance.new("Sound")
+            thud.SoundId = "rbxassetid://138587268"
+            thud.Volume = 3
+            thud.Pitch = 0.6
+            thud.Parent = head
+            thud:Play()
+            game:GetService("Debris"):AddItem(thud, 2)
+        end
+    end
+
+    isNomming = false
+    return true
+end
+
+-- ============================ DIGEST ============================
+local function emergencyBellyCleanup()
+    if bulgeConn then bulgeConn:Disconnect(); bulgeConn = nil end
+    stopBurpLoop()
+    for _, state in ipairs(activeBulges) do
+        if state.part and state.part.Parent then state.part:Destroy() end
+    end
+    activeBulges = {}
+    for _, p in pairs(nomTempParts) do
+        if p and p.Parent then p:Destroy() end
+    end
+    nomTempParts = {}
+    local filtered = {}
+    for _, entry in pairs(jiggleParts) do
+        if entry.group ~= "belly" then
+            table.insert(filtered, entry)
+        end
+    end
+    jiggleParts = filtered
+    activeBellyLayers = {}
+    nomLevel = 0
+    bellyActive = false
+end
+
+local function runDigest(character)
+    if not character or not character.Parent then return end
+    if not bellyActive or isDigesting or isNomming then return end
+    isDigesting = true
+    stopBurpLoop()
+
+    local ok, err = pcall(function()
+        if bulgeConn then bulgeConn:Disconnect(); bulgeConn = nil end
+        for _, state in ipairs(activeBulges) do
+            if state.part and state.part.Parent then state.part:Destroy() end
+        end
+        activeBulges = {}
+
+        local gain = CONFIG.digest.growPerLevel * nomLevel
+        local oldPS = getPlayerScale(currentBodyGrowth)
+        local newGrowth = currentBodyGrowth + gain
+        local newPS = getPlayerScale(newGrowth)
+        local newAssetScale = getAssetScale(newGrowth)
+        currentBodyGrowth = newGrowth
+
+        local dur = CONFIG.digest.duration
+        local info = TweenInfo.new(dur, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+
+        task.spawn(function()
+            local startT = os.clock()
+            while os.clock() - startT < dur do
+                if not character.Parent then return end
+                local a = math.clamp((os.clock() - startT) / dur, 0, 1)
+                local interp = oldPS + (newPS - oldPS) * a
+                setCharacterScale(character, interp)
+                RunService.Heartbeat:Wait()
+            end
+            if character.Parent then
+                setCharacterScale(character, newPS)
+            end
+        end)
+
+        for _, layer in ipairs(activeBellyLayers) do
+            if layer.mesh and layer.mesh.Parent then
+                TweenService:Create(layer.mesh, info, {Scale = Vector3.new(0.05, 0.05, 0.05)}):Play()
+            end
+        end
+
+        for _, ref in ipairs(bodyMeshRefs) do
+            if ref.mesh and ref.mesh.Parent then
+                local newScale = ref.baseScale * newAssetScale
+                TweenService:Create(ref.mesh, info, {Scale = newScale}):Play()
+            end
+            if ref.weld and ref.weld.Parent and ref.baseRawPos then
+                -- FIX: use newAssetScale^positionExponent for weld offset
+                local posMult = newAssetScale ^ CONFIG.growth.positionExponent
+                local newPos = ref.baseRawPos * newPS * posMult
+                TweenService:Create(ref.weld, info, {C0 = CFrame.new(newPos)}):Play()
+            end
+        end
+
+        local startTime = os.clock()
+        while os.clock() - startTime < dur + 0.15 do
+            if not character.Parent then break end
+            RunService.Heartbeat:Wait()
+        end
+
+        for _, entry in pairs(jiggleParts) do
+            if entry.weld and entry.weld.Parent then
+                entry.baseC0 = entry.weld.C0
+            end
+        end
+
+        task.wait(CONFIG.digest.finalBurpDelay)
+
+        if character.Parent then
+            if not burpEmitter or not burpEmitter.Parent then
+                setupBurpObjects(character)
+                startBurpTiltConnection()
+            end
+            triggerBurp(character)
+            task.wait(0.6)
+        end
+    end)
+
+    if not ok then warn("[Digest] "..tostring(err)) end
+    emergencyBellyCleanup()
+    isDigesting = false
+end
+
+-- ============================ RESET ============================
+local function resetEverything()
+    local character = player.Character
+    if not character or not character.Parent then return end
+    currentBodyGrowth = 1.0
+    setCharacterScale(character, 1.0)
+    appliedScale = 1.0
+    task.wait(0.1)
+    if thiccified then
+        buildAll(character)
+    end
+end
+
+-- ============================ TOGGLE ============================
+local function toggleThiccify()
+    local character = player.Character
+    if not character or not character.Parent then return end
+    thiccified = not thiccified
+    if thiccified then
+        removeClothing(character)
+        task.wait(0.05)
+        buildAll(character)
+    else
+        clearAll(character)
+        restoreClothing()
+        stopHipSpread()
+        setCharacterScale(character, 1.0)
+        appliedScale = 1.0
+        currentBodyGrowth = 1.0
+    end
+    return thiccified
+end
+
+-- ============================ GUI ============================
+local function makeGUI()
+    local pg = player:WaitForChild("PlayerGui")
+    local old = pg:FindFirstChild("ThiccifyGUI")
+    if old then old:Destroy() end
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "ThiccifyGUI"; gui.ResetOnSpawn = false
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling; gui.Parent = pg
+    local function sb(btn)
+        local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,8); c.Parent = btn
+        local s = Instance.new("UIStroke")
+        s.Color = Color3.fromRGB(90,90,110); s.Thickness = 2; s.Parent = btn
+    end
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0,180,0,44); btn.Position = UDim2.new(0,20,0,20)
+    btn.BackgroundColor3 = Color3.fromRGB(30,30,35); btn.TextColor3 = Color3.fromRGB(255,255,255)
+    btn.Font = Enum.Font.SourceSansBold; btn.TextSize = 16
+    btn.Text = "Thiccify: OFF"; btn.Parent = gui
+    sb(btn)
+    btn.Activated:Connect(function()
+        local ok, err = pcall(toggleThiccify)
+        if not ok then warn("[Thiccify] "..tostring(err)); return end
+        btn.Text = thiccified and "Thiccify: ON" or "Thiccify: OFF"
+        btn.BackgroundColor3 = thiccified and Color3.fromRGB(40,90,40) or Color3.fromRGB(30,30,35)
+    end)
+
+    local nomBtn = Instance.new("TextButton")
+    nomBtn.Size = UDim2.new(0,180,0,44); nomBtn.Position = UDim2.new(0,20,0,74)
+    nomBtn.BackgroundColor3 = Color3.fromRGB(30,30,35); nomBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    nomBtn.Font = Enum.Font.SourceSansBold; nomBtn.TextSize = 16
+    nomBtn.Text = "Nom"; nomBtn.Parent = gui
+    sb(nomBtn)
+    nomBtn.Activated:Connect(function()
+        local character = player.Character
+        if not character or not character.Parent then return end
+        if isNomming and (not nomModel or not nomModel.Parent) and not bellyActive then isNomming = false end
+        if isDigesting and not bellyActive then isDigesting = false end
+        if isNomming or isDigesting then return end
+        task.spawn(function()
+            if selectedModel and selectedModel.Parent then
+                local ok, err = pcall(eatSelectedModel, character)
+                if not ok then
+                    warn("[Eat] "..tostring(err))
+                    isNomming = false
+                end
+            else
+                local ok, err = pcall(runNomSequence, character)
+                if not ok then
+                    warn("[Nom] "..tostring(err))
+                    isNomming = false
+                    for _, p in pairs(nomTempParts) do if p and p.Parent then p:Destroy() end end
+                    nomTempParts = {}
+                    if nomModel and nomModel.Parent then nomModel:Destroy() end
+                    nomModel = nil
+                end
+            end
+        end)
+    end)
+
+    local selectBtn = Instance.new("TextButton")
+    selectBtn.Size = UDim2.new(0,180,0,36); selectBtn.Position = UDim2.new(0,20,0,124)
+    selectBtn.BackgroundColor3 = Color3.fromRGB(30,30,35); selectBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    selectBtn.Font = Enum.Font.SourceSansBold; selectBtn.TextSize = 15
+    selectBtn.Text = "Select Mode: OFF"; selectBtn.Parent = gui
+    sb(selectBtn)
+    selectBtn.Activated:Connect(function()
+        if selectModeOn then
+            stopSelectMode()
+            selectBtn.Text = "Select Mode: OFF"
+            selectBtn.BackgroundColor3 = Color3.fromRGB(30,30,35)
+        else
+            startSelectMode()
+            selectBtn.Text = "Select Mode: ON"
+            selectBtn.BackgroundColor3 = Color3.fromRGB(50,60,120)
+        end
+    end)
+
+    local digestBtn = Instance.new("TextButton")
+    digestBtn.Size = UDim2.new(0,180,0,44); digestBtn.Position = UDim2.new(0,20,0,166)
+    digestBtn.BackgroundColor3 = Color3.fromRGB(30,30,35); digestBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    digestBtn.Font = Enum.Font.SourceSansBold; digestBtn.TextSize = 16
+    digestBtn.Text = "Digest"; digestBtn.Parent = gui
+    sb(digestBtn)
+    digestBtn.Activated:Connect(function()
+        local character = player.Character
+        if not character or not character.Parent then return end
+        if isDigesting or isNomming then return end
+        if not bellyActive then return end
+        task.spawn(function()
+            local ok, err = pcall(runDigest, character)
+            if not ok then
+                warn("[Digest] "..tostring(err))
+                isDigesting = false
+                emergencyBellyCleanup()
+            end
+        end)
+    end)
+
+    local resetBtn = Instance.new("TextButton")
+    resetBtn.Size = UDim2.new(0,180,0,30); resetBtn.Position = UDim2.new(0,20,0,216)
+    resetBtn.BackgroundColor3 = Color3.fromRGB(60,30,30); resetBtn.TextColor3 = Color3.fromRGB(255,220,220)
+    resetBtn.Font = Enum.Font.SourceSansBold; resetBtn.TextSize = 14
+    resetBtn.Text = "Reset Growth"; resetBtn.Parent = gui
+    sb(resetBtn)
+    resetBtn.Activated:Connect(function()
+        task.spawn(resetEverything)
+    end)
+
+    local lvl = Instance.new("TextLabel")
+    lvl.Size = UDim2.new(0,220,0,20); lvl.Position = UDim2.new(0,20,0,254)
+    lvl.BackgroundTransparency = 1; lvl.TextColor3 = Color3.fromRGB(255,255,255)
+    lvl.Font = Enum.Font.SourceSansBold; lvl.TextSize = 13
+    lvl.Text = "Nom Level: 0"
+    lvl.TextXAlignment = Enum.TextXAlignment.Left; lvl.Parent = gui
+
+    local growthLabel = Instance.new("TextLabel")
+    growthLabel.Size = UDim2.new(0,220,0,20); growthLabel.Position = UDim2.new(0,20,0,274)
+    growthLabel.BackgroundTransparency = 1; growthLabel.TextColor3 = Color3.fromRGB(255,220,120)
+    growthLabel.Font = Enum.Font.SourceSansBold; growthLabel.TextSize = 13
+    growthLabel.Text = "Assets: 100%  |  Body: 100%"
+    growthLabel.TextXAlignment = Enum.TextXAlignment.Left; growthLabel.Parent = gui
+
+    local hint = Instance.new("TextLabel")
+    hint.Size = UDim2.new(0,220,0,20); hint.Position = UDim2.new(0,20,0,294)
+    hint.BackgroundTransparency = 1; hint.TextColor3 = Color3.fromRGB(180,180,220)
+    hint.Font = Enum.Font.SourceSansBold; hint.TextSize = 12
+    hint.Text = "Click a model in Select Mode to eat it"
+    hint.TextXAlignment = Enum.TextXAlignment.Left; hint.Parent = gui
+
+    task.spawn(function()
+        while gui.Parent do
+            lvl.Text = "Nom Level: "..nomLevel
+            local assetPct = math.floor(getAssetScale(currentBodyGrowth) * 100 + 0.5)
+            local playerPct = math.floor(getPlayerScale(currentBodyGrowth) * 100 + 0.5)
+            growthLabel.Text = string.format("Assets: %d%%  |  Body: %d%%", assetPct, playerPct)
+            RunService.Heartbeat:Wait()
+        end
+    end)
+end
+
+-- ============================ LIFECYCLE ============================
+local function resetBellyState()
+    emergencyBellyCleanup()
+    isNomming = false
+    isDigesting = false
+    nomModel = nil
+end
+
+local function onCharacter(character)
+    resetBellyState()
+    stopHipSpread()
+    stopSelectMode()
+    appliedScale = 1.0
+    task.wait(0.3)
+    local targetScale = getPlayerScale(currentBodyGrowth)
+    if math.abs(targetScale - 1.0) > 0.01 then
+        setCharacterScale(character, targetScale)
+    end
+    if thiccified then
+        removeClothing(character)
+        task.wait(0.05)
+        buildAll(character)
+    end
+end
+
+if player.Character then onCharacter(player.Character) end
+player.CharacterAdded:Connect(onCharacter)
+makeGUI()
